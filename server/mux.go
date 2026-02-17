@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"path"
 	"strings"
@@ -145,6 +146,11 @@ func NewMux(
 		})
 
 		router.Mount("/ws", wsHandler)
+			router.Get("/subtitles", func(w http.ResponseWriter, r *http.Request) {
+				target, _ := url.Parse("http://localhost:8765")
+				proxy := httputil.NewSingleHostReverseProxy(target)
+				proxy.ServeHTTP(w, r)
+			})
 	})
 
 	return mux

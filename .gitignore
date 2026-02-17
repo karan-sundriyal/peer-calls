@@ -10,3 +10,31 @@ config/local.yaml
 lib/
 tsconfig.tsbuildinfo
 *.out
+
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+Thumbs.db
+.idea/
+.vscode/
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+peer-calls
+
+.docker/
+docker-compose.override.yml
+
+config/*.local.yaml
+*.pem               # SSL certificates
+*.key               # private keys
+*.crt
+
+*.log
+logs/

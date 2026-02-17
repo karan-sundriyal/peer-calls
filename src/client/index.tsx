@@ -6,6 +6,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import store from './store'
 import { Provider } from 'react-redux'
+import { SubtitleOverlay } from '../subtitle'
 
 const component = (
   <Provider store={store}>
@@ -14,3 +15,5 @@ const component = (
 )
 
 ReactDOM.render(component, document.getElementById('container'))
+
+new SubtitleOverlay()

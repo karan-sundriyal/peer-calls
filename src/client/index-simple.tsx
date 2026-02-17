@@ -1,6 +1,7 @@
 import Peer from 'simple-peer'
 import socket from './socket'
 import { config } from './window'
+import { SubtitleOverlay } from '../subtitle'
 
 const { peerConfig, peerId, callId } = config
 
@@ -112,3 +113,5 @@ socket.on('connect', () => {
   })
 
 })
+
+new SubtitleOverlay()
