@@ -19,6 +19,35 @@ import VUMeter from './VUMeter'
 
 const { network } = config
 
+const SUBTITLE_LANGUAGES: { code: string; name: string }[] = [
+  { code: 'en', name: 'English' },
+  { code: 'hi', name: 'Hindi' },
+  { code: 'ta', name: 'Tamil' },
+  { code: 'te', name: 'Telugu' },
+  { code: 'bn', name: 'Bengali' },
+  { code: 'mr', name: 'Marathi' },
+  { code: 'gu', name: 'Gujarati' },
+  { code: 'kn', name: 'Kannada' },
+  { code: 'ml', name: 'Malayalam' },
+  { code: 'pa', name: 'Punjabi' },
+  { code: 'ur', name: 'Urdu' },
+  { code: 'or', name: 'Odia' },
+  { code: 'as', name: 'Assamese' },
+  { code: 'ne', name: 'Nepali' },
+  { code: 'si', name: 'Sinhala' },
+]
+
+/**
+ * Route language config through the SubtitleOverlay's single WebSocket
+ * so there is only ever ONE connection to the transcription server per client.
+ */
+function sendSubtitleConfig(spokenLang: string, targetLang: string) {
+  const overlay = (window as any).__subtitleOverlay
+  if (overlay && typeof overlay.setLanguages === 'function') {
+    overlay.setLanguages(spokenLang, targetLang)
+  }
+}
+
 export type MediaProps = MediaState & {
   joinEnabled: boolean
   dial: typeof dial
@@ -38,15 +67,16 @@ export type MediaProps = MediaState & {
 export interface MediaComponentState {
   nickname: string
   error?: boolean
+  spokenLang: string
+  targetLang: string
 }
 
 function mapStateToProps(state: State) {
   const stream = state.streams.localStreams[StreamTypeCamera]
-
   return {
     ...state.media,
     nickname: state.nicknames[ME],
-    stream: stream,
+    stream,
     joinEnabled:
       state.media.dialState === DIAL_STATE_HUNG_UP &&
       state.media.socketConnected &&
@@ -69,109 +99,100 @@ const mapDispatchToProps = {
 
 const c = connect(mapStateToProps, mapDispatchToProps)
 
-export class MediaForm
-extends React.PureComponent<MediaProps, MediaComponentState> {
+export class MediaForm extends React.PureComponent<MediaProps, MediaComponentState> {
   constructor(props: MediaProps) {
     super(props)
     this.state = {
       nickname: props.nickname || '',
+      spokenLang: 'hi',
+      targetLang: 'en',
     }
   }
 
   async componentDidMount() {
     let stream: MediaStream
-
     try {
       const res = await this.getMediaStream()
       stream = res.stream
-    } catch(e) {
+    } catch (e) {
       stream = new MediaStream()
     }
-
     await this.props.enumerateDevices({
       getUserMedia: stream.getTracks().length === 0,
     })
+    // Push initial language config to the overlay's WebSocket
+    sendSubtitleConfig(this.state.spokenLang, this.state.targetLang)
   }
+
   async componentDidUpdate(prevProps: MediaProps) {
     const { video, audio } = this.props
-
-    const prevVideo = prevProps.video
-    const prevAudio = prevProps.audio
-
-    if (video === prevVideo && audio === prevAudio) {
-      return
-    }
-
+    if (video === prevProps.video && audio === prevProps.audio) return
     const { stream } = this.props
-
-    if (stream) {
-      stream.stream.getTracks().forEach(t => t.stop())
-    }
-
+    if (stream) stream.stream.getTracks().forEach(t => t.stop())
     try {
       await this.getMediaStream()
     } catch {
-      this.setState({error: true})
+      this.setState({ error: true })
     }
   }
+
   getMediaStream = async () => {
-    const constraints: MediaStreamConstraints = {
-      audio: false,
-      video: false,
-    }
-
+    const constraints: MediaStreamConstraints = { audio: false, video: false }
     const { audio, video } = this.props
-
-    if (audio.enabled) {
-      constraints.audio = audio.constraints
-    }
-
-    if (video.enabled) {
-      constraints.video = video.constraints
-    }
-
+    if (audio.enabled) constraints.audio = audio.constraints
+    if (video.enabled) constraints.video = video.constraints
     return this.props.getMediaStream(constraints)
   }
+
   handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     const { nickname } = this.state
     localStorage && (localStorage.nickname = nickname)
     event.preventDefault()
     const { props } = this
-
     props.logInfo('Dialling...')
     try {
-      await props.dial({
-        nickname,
-      })
+      await props.dial({ nickname })
     } catch (err) {
       props.logError('Error dialling: {0}', err)
     }
   }
+
   handleVideoChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
-    this.handleChange('video', event.target.value)
+    this.props.setDeviceId({ kind: 'video', deviceId: event.target.value })
   }
+
   handleAudioChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
-    this.handleChange('audio', event.target.value)
+    this.props.setDeviceId({ kind: 'audio', deviceId: event.target.value })
   }
+
   handleNicknameChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     this.setState({ nickname: event.target.value })
   }
-  handleChange = (kind: MediaKind, deviceId: string) => {
-    this.props.setDeviceId({
-      kind,
-      deviceId,
-    })
+
+  handleSpokenLangChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const spokenLang = event.target.value
+    this.setState({ spokenLang }, () => sendSubtitleConfig(spokenLang, this.state.targetLang))
   }
+
+  handleTargetLangChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const targetLang = event.target.value
+    this.setState({ targetLang }, () => sendSubtitleConfig(this.state.spokenLang, targetLang))
+  }
+
   render() {
     const { props } = this
     const { audio, video, stream } = props
-    const { nickname } = this.state
+    const { nickname, spokenLang, targetLang } = this.state
 
     const videoId = getDeviceId(video.enabled, video.constraints)
     const audioId = getDeviceId(audio.enabled, audio.constraints)
 
+    const spokenName = SUBTITLE_LANGUAGES.find(l => l.code === spokenLang)?.name ?? spokenLang
+    const targetName = SUBTITLE_LANGUAGES.find(l => l.code === targetLang)?.name ?? targetLang
+
     return (
       <form className='media' onSubmit={this.handleSubmit}>
+
         <div className='form-item'>
           <VideoSrc
             srcObject={stream ? stream.stream : null}
@@ -183,13 +204,14 @@ extends React.PureComponent<MediaProps, MediaComponentState> {
             {stream && <VUMeter streamId={stream && stream.streamId} />}
           </div>
         </div>
+
         <div className='form-item'>
           <label className={classnames({ 'label-error': !nickname })}>
             Enter your name
           </label>
           <input
             required
-            className={classnames({error: !nickname})}
+            className={classnames({ error: !nickname })}
             name='nickname'
             type='text'
             placeholder='Name'
@@ -200,40 +222,71 @@ extends React.PureComponent<MediaProps, MediaComponentState> {
         </div>
 
         <div className='form-item'>
-          <select
-            name='video-input'
-            onChange={this.handleVideoChange}
-            value={videoId}
-            autoComplete='off'
-          >
-            <Options
-              devices={props.devices.video}
-              default={DEVICE_DEFAULT_ID}
-              type='videoinput'
-            />
+          <select name='video-input' onChange={this.handleVideoChange} value={videoId} autoComplete='off'>
+            <Options devices={props.devices.video} default={DEVICE_DEFAULT_ID} type='videoinput' />
           </select>
         </div>
 
         <div className='form-item'>
-          <select
-            name='audio-input'
-            onChange={this.handleAudioChange}
-            value={audioId}
-            autoComplete='off'
-          >
-            <Options
-              devices={props.devices.audio}
-              default={DEVICE_DEFAULT_ID}
-              type='audioinput'
-            />
+          <select name='audio-input' onChange={this.handleAudioChange} value={audioId} autoComplete='off'>
+            <Options devices={props.devices.audio} default={DEVICE_DEFAULT_ID} type='audioinput' />
           </select>
+        </div>
+
+        {/* Subtitle language settings */}
+        <div className='subtitle-lang-settings'>
+          <div className='subtitle-lang-settings__header'>
+            <span className='subtitle-lang-settings__icon'>💬</span>
+            Live Subtitle Settings
+          </div>
+
+          <div className='subtitle-lang-row'>
+            <div className='subtitle-lang-item'>
+              <label>Language being spoken</label>
+              <select
+                name='spoken-lang'
+                value={spokenLang}
+                onChange={this.handleSpokenLangChange}
+                autoComplete='off'
+              >
+                {SUBTITLE_LANGUAGES.map(l => (
+                  <option key={l.code} value={l.code}>{l.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className='subtitle-lang-arrow' aria-hidden='true'>→</div>
+
+            <div className='subtitle-lang-item'>
+              <label>Translate subtitles into</label>
+              <select
+                name='target-lang'
+                value={targetLang}
+                onChange={this.handleTargetLangChange}
+                autoComplete='off'
+              >
+                {SUBTITLE_LANGUAGES.map(l => (
+                  <option key={l.code} value={l.code}>{l.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <p className='subtitle-lang-settings__note'>
+            {spokenLang === targetLang
+              ? 'Subtitles will appear in the spoken language (no translation).'
+              : <>Subtitles translated from <strong>{spokenName}</strong> → <strong>{targetName}</strong> in real time.</>
+            }
+          </p>
         </div>
 
         <button type='submit' disabled={!props.joinEnabled}>
           Join Call
         </button>
 
-        <a className="button-abort" href={config.baseUrl || '/'}>Abort</a>
+        <a className='button-abort' href={config.baseUrl || '/'}>
+          Abort
+        </a>
 
         {this.state.error && (
           <Message className='message-error'>
@@ -259,20 +312,16 @@ export interface AutoplayProps {
   play: () => void
 }
 
-export const AutoplayMessage = React.memo(
-  function Autoplay(props: AutoplayProps) {
-    return (
-      <React.Fragment>
-        Your browser has blocked video autoplay on this page.
-        To continue with your call, please press the play button:
-        &nbsp;
-        <button className='button' onClick={props.play}>
-          Play
-        </button>
-      </React.Fragment>
-    )
-  },
-)
+export const AutoplayMessage = React.memo(function Autoplay(props: AutoplayProps) {
+  return (
+    <React.Fragment>
+      Your browser has blocked video autoplay on this page.
+      To continue with your call, please press the play button:
+      &nbsp;
+      <button className='button' onClick={props.play}>Play</button>
+    </React.Fragment>
+  )
+})
 
 export const Media = c(React.memo(function Media(props: MediaProps) {
   return (
@@ -284,7 +333,6 @@ export const Media = c(React.memo(function Media(props: MediaProps) {
           </Alert>
         )}
       </Alerts>
-
       {props.visible && <MediaForm {...props} />}
     </div>
   )
@@ -296,10 +344,7 @@ interface OptionsProps {
   default: string
 }
 
-const labels = {
-  audioinput: 'Audio',
-  videoinput: 'Video',
-}
+const labels = { audioinput: 'Audio', videoinput: 'Video' }
 
 function Options(props: OptionsProps) {
   const label = labels[props.type]
@@ -307,17 +352,11 @@ function Options(props: OptionsProps) {
     <React.Fragment>
       <option value={DEVICE_DISABLED_ID}>No {label}</option>
       <option value={DEVICE_DEFAULT_ID}>Default {label}</option>
-      {
-        props.devices
-        .map(device =>
-          <option
-            key={device.id}
-            value={device.id}
-          >
-            {device.name || device.type}
-          </option>,
-        )
-      }
+      {props.devices.map(device => (
+        <option key={device.id} value={device.id}>
+          {device.name || device.type}
+        </option>
+      ))}
     </React.Fragment>
   )
 }

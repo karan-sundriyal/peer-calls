@@ -1,8 +1,20 @@
+/**
+ * SubtitleOverlay
+ *
+ * Single WebSocket connection that:
+ *  1. Receives translated subtitle messages from the transcription server
+ *  2. Sends language config to the server (no separate config socket needed)
+ *
+ * Call SubtitleOverlay.setLanguages(spoken, target) to update language config.
+ */
 export class SubtitleOverlay {
   private container: HTMLElement
   private langBadge: HTMLElement
   private ws: WebSocket | null = null
   private fadeTimer: ReturnType<typeof setTimeout> | null = null
+  private spokenLang: string = 'hi'
+  private targetLang: string = 'en'
+  private static instance: SubtitleOverlay | null = null
 
   constructor() {
     this.container = this.createContainer()
@@ -10,6 +22,28 @@ export class SubtitleOverlay {
     this.container.appendChild(this.langBadge)
     document.body.appendChild(this.container)
     this.connect()
+
+    // Expose singleton on window so Media.tsx can call setLanguages
+    ;(window as any).__subtitleOverlay = this
+    SubtitleOverlay.instance = this
+  }
+
+  /** Call this from Media.tsx whenever the user changes language dropdowns */
+  setLanguages(spokenLang: string, targetLang: string) {
+    this.spokenLang = spokenLang
+    this.targetLang = targetLang
+    this.sendConfig()
+  }
+
+  private sendConfig() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'config',
+        spoken_lang: this.spokenLang,
+        target_lang: this.targetLang,
+      }))
+      console.log(`[Subtitles] Config sent: spoken=${this.spokenLang}, target=${this.targetLang}`)
+    }
   }
 
   private createContainer(): HTMLElement {
@@ -59,12 +93,20 @@ export class SubtitleOverlay {
     const host = window.location.host
     this.ws = new WebSocket(`${protocol}://${host}/subtitles`)
 
-    this.ws.onopen = () => console.log('[Subtitles] Connected ✓')
+    this.ws.onopen = () => {
+      console.log('[Subtitles] Connected ✓')
+      // Send config immediately on connect so server knows our language preference
+      this.sendConfig()
+    }
 
     this.ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      if (data.type === 'subtitle') {
-        this.show(data.text, data.language)
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'subtitle') {
+          this.show(data.text, data.language)
+        }
+      } catch (e) {
+        console.warn('[Subtitles] Failed to parse message', e)
       }
     }
 
@@ -91,7 +133,7 @@ export class SubtitleOverlay {
 
     this.container.insertBefore(
       document.createTextNode(text),
-      this.langBadge
+      this.langBadge,
     )
 
     this.container.style.opacity = '1'
