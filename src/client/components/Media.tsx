@@ -145,17 +145,23 @@ export class MediaForm extends React.PureComponent<MediaProps, MediaComponentSta
   }
 
   handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    const { nickname } = this.state
-    localStorage && (localStorage.nickname = nickname)
-    event.preventDefault()
-    const { props } = this
-    props.logInfo('Dialling...')
-    try {
-      await props.dial({ nickname })
-    } catch (err) {
-      props.logError('Error dialling: {0}', err)
+  const { nickname } = this.state
+  localStorage && (localStorage.nickname = nickname)
+  event.preventDefault()
+  const { props } = this
+  props.logInfo('Dialling...')
+  try {
+    await props.dial({ nickname })
+
+    // Start streaming audio to transcription server
+    const overlay = (window as any).__subtitleOverlay
+    if (overlay) {
+      overlay.startAudio(props.stream?.stream)
     }
+  } catch (err) {
+    props.logError('Error dialling: {0}', err)
   }
+}
 
   handleVideoChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
     this.props.setDeviceId({ kind: 'video', deviceId: event.target.value })
