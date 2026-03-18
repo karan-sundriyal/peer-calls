@@ -1,37 +1,39 @@
-import sounddevice as sd
-import numpy as np
-import queue
-import threading
 import asyncio
-from websockets import serve
+import numpy as np
 import json
+from websockets import serve
+from websockets.server import WebSocketServerProtocol
 from faster_whisper import WhisperModel
 from deep_translator import GoogleTranslator
 
+# =======================
+# Model setup
+# =======================
+try:
+    model = WhisperModel("medium", device="cuda", compute_type="float16")
+    print("[Model] Running on GPU")
+except Exception as e:
+    print(f"[Model] GPU failed ({e}), using CPU")
+    model = WhisperModel("medium", device="cpu", compute_type="int8")
+
+# =======================
+# Audio config
+# =======================
 samplerate = 16000
-block_duration  = 0.1
-chunk_duration  = 0.7
-overlap_duration = 0.3
-channels = 1
+chunk_duration = 0.7
+frames_per_chunk = int(samplerate * chunk_duration)
 
-frames_per_block   = int(samplerate * block_duration)
-frames_per_chunk   = int(samplerate * chunk_duration)
-frames_overlap     = int(samplerate * overlap_duration)
-
-audio_queue = queue.Queue()
-audio_buffer = []
+# =======================
+# Client state
+# =======================
 connected_clients = set()
-last_text = ""
-
-# Per-client config: { websocket: { spoken_lang: "hi", target_lang: "en" } }
 client_config = {}
+audio_buffers = {}
+last_texts = {}
 
-ALLOWED_LANGUAGES = {
-    "en", "hi", "ta", "te", "bn", "mr",
-    "gu", "kn", "ml", "pa", "ur", "or",
-    "as", "ne", "si",
-}
-
+# =======================
+# Language mapping
+# =======================
 LANGUAGE_NAMES = {
     "en": "English", "hi": "Hindi",   "ta": "Tamil",
     "te": "Telugu",  "bn": "Bengali", "mr": "Marathi",
@@ -40,155 +42,130 @@ LANGUAGE_NAMES = {
     "as": "Assamese","ne": "Nepali",  "si": "Sinhala",
 }
 
-# Mapping from our lang codes to deep_translator / Google Translate codes
-TRANSLATOR_LANG_MAP = {
-    "en": "en", "hi": "hi", "ta": "ta", "te": "te",
-    "bn": "bn", "mr": "mr", "gu": "gu", "kn": "kn",
-    "ml": "ml", "pa": "pa", "ur": "ur", "or": "or",
-    "as": "as", "ne": "ne", "si": "si",
-}
-
-try:
-    model = WhisperModel("medium", device="cuda", compute_type="float16")
-    print("[Model] Running on GPU (medium float16, multilingual)")
-except Exception as e:
-    print(f"[Model] GPU failed ({e}), falling back to CPU int8")
-    model = WhisperModel("medium", device="cpu", compute_type="int8")
-
-# Global spoken/target language (used as defaults before any client config arrives)
-# These are updated when ANY client sends a config message.
-# In a single-speaker scenario this works fine.
-current_spoken_lang = "hi"   # default: Hindi
-current_target_lang = "en"   # default: English
-
-async def ws_handler(websocket):
-    global current_spoken_lang, current_target_lang
-
+# =======================
+# WebSocket handler
+# =======================
+async def ws_handler(websocket: WebSocketServerProtocol):
     connected_clients.add(websocket)
+
     client_config[websocket] = {
-        "spoken_lang": current_spoken_lang,
-        "target_lang": current_target_lang,
+        "spoken_lang": "hi",
+        "target_lang": "en",
     }
+
+    audio_buffers[websocket] = np.array([], dtype=np.float32)
+    last_texts[websocket] = ""
+
     print(f"[WS] Client connected. Total: {len(connected_clients)}")
 
     try:
-        async for raw in websocket:
-            try:
-                msg = json.loads(raw)
-                if msg.get("type") == "config":
-                    spoken = msg.get("spoken_lang", "hi")
-                    target = msg.get("target_lang", "en")
-                    client_config[websocket] = {
-                        "spoken_lang": spoken,
-                        "target_lang": target,
-                    }
-                    # Update globals so the transcriber uses the latest selection
-                    current_spoken_lang = spoken
-                    current_target_lang = target
-                    print(f"[Config] spoken={spoken}, target={target}")
-            except Exception as e:
-                print(f"[WS] Bad message: {e}")
+        async for message in websocket:
+
+            # -----------------------
+            # TEXT = config message
+            # -----------------------
+            if isinstance(message, str):
+                try:
+                    msg = json.loads(message)
+
+                    if msg.get("type") == "config":
+                        client_config[websocket] = {
+                            "spoken_lang": msg.get("spoken_lang", "hi"),
+                            "target_lang": msg.get("target_lang", "en"),
+                        }
+
+                        print(f"[Config] {client_config[websocket]}")
+
+                except Exception as e:
+                    print(f"[WS] Bad config: {e}")
+
+            # -----------------------
+            # BINARY = audio chunk
+            # -----------------------
+            elif isinstance(message, bytes):
+                chunk = np.frombuffer(message, dtype=np.float32)
+
+                audio_buffers[websocket] = np.concatenate(
+                    [audio_buffers[websocket], chunk]
+                )
+
+                if len(audio_buffers[websocket]) >= frames_per_chunk:
+                    await process_audio(websocket)
+
     finally:
         connected_clients.discard(websocket)
         client_config.pop(websocket, None)
+        audio_buffers.pop(websocket, None)
+        last_texts.pop(websocket, None)
+
         print(f"[WS] Client disconnected. Total: {len(connected_clients)}")
 
-async def broadcast(text, spoken_lang_name, target_lang_name):
-    if not connected_clients:
+# =======================
+# Audio processing
+# =======================
+async def process_audio(websocket):
+    cfg = client_config.get(websocket, {})
+
+    spoken = cfg.get("spoken_lang", "hi")
+    target = cfg.get("target_lang", "en")
+
+    data = audio_buffers[websocket][:frames_per_chunk]
+
+    # 50% overlap for smoother transcription
+    audio_buffers[websocket] = audio_buffers[websocket][frames_per_chunk // 2:]
+
+    # -----------------------
+    # Transcription
+    # -----------------------
+    segments, _ = model.transcribe(
+        data,
+        language=spoken,
+        beam_size=1,
+        best_of=1,
+        vad_filter=True,
+        without_timestamps=True,
+        vad_parameters=dict(
+            min_silence_duration_ms=200,
+            threshold=0.3,
+        ),
+    )
+
+    text = " ".join(s.text.strip() for s in segments if s.text.strip())
+
+    if not text or text == last_texts.get(websocket, ""):
         return
-    tasks = []
-    for client in connected_clients:
-        cfg = client_config.get(client, {})
-        tgt = cfg.get("target_lang", current_target_lang)
-        tgt_name = LANGUAGE_NAMES.get(tgt, tgt)
 
-        # Translate if target differs from spoken language
-        translated = text
-        spk = cfg.get("spoken_lang", current_spoken_lang)
-        if spk != tgt:
-            try:
-                src_code = TRANSLATOR_LANG_MAP.get(spk, spk)
-                tgt_code = TRANSLATOR_LANG_MAP.get(tgt, tgt)
-                translated = GoogleTranslator(source=src_code, target=tgt_code).translate(text)
-            except Exception as e:
-                print(f"[Translate] Error: {e}")
+    last_texts[websocket] = text
 
-        message = json.dumps({
-            "type": "subtitle",
-            "text": translated,
-            "language": tgt_name,
-        })
-        tasks.append(client.send(message))
+    print(f"[{spoken} → {target}] {text}")
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    # -----------------------
+    # Translation
+    # -----------------------
+    translated = text
+    if spoken != target:
+        try:
+            translated = GoogleTranslator(source=spoken, target=target).translate(text)
+        except Exception as e:
+            print(f"[Translate] Error: {e}")
 
-async def start_ws_server():
-    async with serve(ws_handler, "0.0.0.0", 8765, origins=None):
-        print("[WS] Server ready on ws://0.0.0.0:8765")
+    # -----------------------
+    # Send result
+    # -----------------------
+    message = json.dumps({
+        "type": "subtitle",
+        "text": translated,
+        "language": LANGUAGE_NAMES.get(target, target),
+    })
+
+    await websocket.send(message)
+
+# =======================
+# Server start
+# =======================
+async def main():
+    async with serve(ws_handler, "0.0.0.0", 8765):
+        print("[WS] Server running on ws://0.0.0.0:8765")
         await asyncio.Future()
 
-def audio_callback(indata, frames, time, status):
-    if status:
-        print(status)
-    audio_queue.put(indata.copy())
-
-def recorder():
-    with sd.InputStream(samplerate=samplerate, channels=channels,
-                        callback=audio_callback, blocksize=frames_per_block):
-        print("Listening... press Ctrl+C to stop")
-        while True:
-            sd.sleep(100)
-
-loop = asyncio.new_event_loop()
-
-def transcriber():
-    global audio_buffer, last_text
-    while True:
-        block = audio_queue.get()
-        audio_buffer.append(block)
-
-        total_frames = sum(len(b) for b in audio_buffer)
-        if total_frames >= frames_per_chunk:
-            audio_data = np.concatenate(audio_buffer).flatten().astype(np.float32)
-            audio_data = audio_data[:frames_per_chunk]
-
-            overlap_frames = np.concatenate(audio_buffer)[-frames_overlap:]
-            audio_buffer = [overlap_frames]
-
-            # Use the user-selected spoken language — no auto-detection
-            spoken = current_spoken_lang
-            lang_name = LANGUAGE_NAMES.get(spoken, spoken)
-
-            segments, info = model.transcribe(
-                audio_data,
-                language=spoken,           # <-- force the selected language
-                beam_size=1,
-                best_of=1,
-                vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=200,
-                    threshold=0.3,
-                ),
-                condition_on_previous_text=False,
-                without_timestamps=True,
-            )
-
-            full_text = " ".join(
-                seg.text.strip() for seg in segments if seg.text.strip()
-            )
-
-            if not full_text or full_text == last_text:
-                continue
-
-            last_text = full_text
-            target_name = LANGUAGE_NAMES.get(current_target_lang, current_target_lang)
-            print(f"[{lang_name} → {target_name}] {full_text}")
-
-            asyncio.run_coroutine_threadsafe(
-                broadcast(full_text, lang_name, target_name), loop
-            )
-
-threading.Thread(target=recorder, daemon=True).start()
-threading.Thread(target=transcriber, daemon=True).start()
-
-loop.run_until_complete(start_ws_server())
+asyncio.run(main())

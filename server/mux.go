@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 
@@ -146,11 +147,21 @@ func NewMux(
 		})
 
 		router.Mount("/ws", wsHandler)
-			router.Get("/subtitles", func(w http.ResponseWriter, r *http.Request) {
-				target, _ := url.Parse("http://localhost:8765")
-				proxy := httputil.NewSingleHostReverseProxy(target)
-				proxy.ServeHTTP(w, r)
-			})
+		router.Get("/subtitles", func(w http.ResponseWriter, r *http.Request) {
+			subtitleURL := os.Getenv("SUBTITLE_WS_URL")
+			if subtitleURL == "" {
+				subtitleURL = "http://localhost:8765" // local dev fallback
+			}
+			target, _ := url.Parse(subtitleURL)
+			proxy := httputil.NewSingleHostReverseProxy(target)
+			proxy.Director = func(req *http.Request) {
+				req.URL.Scheme = target.Scheme
+				req.URL.Host = target.Host
+				req.Host = target.Host
+				req.Header.Set("ngrok-skip-browser-warning", "true")
+			}
+			proxy.ServeHTTP(w, r)
+		})
 	})
 
 	return mux
