@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -90,7 +91,11 @@ func subtitleProxyHandler(w http.ResponseWriter, r *http.Request) {
 	backendHeader := http.Header{
 		"ngrok-skip-browser-warning": []string{"true"},
 	}
-	backendConn, _, err := websocket.DefaultDialer.Dial(wsBackendURL, backendHeader)
+	// Add this import at the top: "crypto/tls"
+	dialer := websocket.Dialer{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	backendConn, _, err := dialer.Dial(wsBackendURL, backendHeader)
 	if err != nil {
 		log.Printf("[subtitles] backend dial error: %v", err)
 		http.Error(w, "subtitle server unavailable", http.StatusBadGateway)
