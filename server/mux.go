@@ -2,15 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"io/fs"
+	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/go-chi/chi"
+	"github.com/gorilla/websocket"
 	"github.com/peer-calls/peer-calls/v4/server/identifiers"
 	"github.com/peer-calls/peer-calls/v4/server/logger"
 	"github.com/peer-calls/peer-calls/v4/server/pubsub"
@@ -67,6 +69,80 @@ func withGauge(counter prometheus.Counter, h http.HandlerFunc) http.HandlerFunc 
 type RoomManager interface {
 	Enter(room identifiers.RoomID) (adapter Adapter, isNew bool)
 	Exit(room identifiers.RoomID) (isRemoved bool)
+}
+
+var clientUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+func subtitleProxyHandler(w http.ResponseWriter, r *http.Request) {
+	subtitleURL := os.Getenv("SUBTITLE_WS_URL")
+	if subtitleURL == "" {
+		subtitleURL = "http://localhost:8765"
+	}
+
+	// Convert http(s) to ws(s) for the backend dial
+	wsBackendURL := strings.Replace(subtitleURL, "https://", "wss://", 1)
+	wsBackendURL = strings.Replace(wsBackendURL, "http://", "ws://", 1)
+	wsBackendURL = wsBackendURL + "/subtitles"
+
+	// Dial the backend (ngrok → Colab)
+	backendHeader := http.Header{
+		"ngrok-skip-browser-warning": []string{"true"},
+	}
+	backendConn, _, err := websocket.DefaultDialer.Dial(wsBackendURL, backendHeader)
+	if err != nil {
+		log.Printf("[subtitles] backend dial error: %v", err)
+		http.Error(w, "subtitle server unavailable", http.StatusBadGateway)
+		return
+	}
+	defer backendConn.Close()
+
+	// Upgrade the browser connection to WebSocket
+	clientConn, err := clientUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[subtitles] client upgrade error: %v", err)
+		return
+	}
+	defer clientConn.Close()
+
+	// Pipe messages in both directions
+	errc := make(chan error, 2)
+
+	// Browser → Colab (config messages + audio binary)
+	go func() {
+		for {
+			mt, msg, err := clientConn.ReadMessage()
+			if err != nil {
+				errc <- err
+				return
+			}
+			if err = backendConn.WriteMessage(mt, msg); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+
+	// Colab → Browser (subtitle JSON messages)
+	go func() {
+		for {
+			mt, msg, err := backendConn.ReadMessage()
+			if err != nil {
+				errc <- err
+				return
+			}
+			if err = clientConn.WriteMessage(mt, msg); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+
+	// Wait until one side disconnects
+	if err := <-errc; err != nil && err != io.EOF {
+		log.Printf("[subtitles] proxy closed: %v", err)
+	}
 }
 
 func NewMux(
@@ -140,28 +216,13 @@ func NewMux(
 
 			if accessToken == "" || accessToken != prom.AccessToken {
 				w.WriteHeader(http.StatusUnauthorized)
-
 				return
 			}
 			promhttp.Handler().ServeHTTP(w, r)
 		})
 
 		router.Mount("/ws", wsHandler)
-		router.Get("/subtitles", func(w http.ResponseWriter, r *http.Request) {
-			subtitleURL := os.Getenv("SUBTITLE_WS_URL")
-			if subtitleURL == "" {
-				subtitleURL = "http://localhost:8765" // local dev fallback
-			}
-			target, _ := url.Parse(subtitleURL)
-			proxy := httputil.NewSingleHostReverseProxy(target)
-			proxy.Director = func(req *http.Request) {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.Host = target.Host
-				req.Header.Set("ngrok-skip-browser-warning", "true")
-			}
-			proxy.ServeHTTP(w, r)
-		})
+		router.Get("/subtitles", subtitleProxyHandler)
 	})
 
 	return mux
@@ -179,20 +240,17 @@ func newWebSocketHandler(
 	switch network.Type {
 	case NetworkTypeSFU:
 		log.Info("Using network type sfu", nil)
-
 		return NewSFUHandler(log, wss, iceServers, network.SFU, tracks)
 	case NetworkTypeMesh:
 		fallthrough
 	default:
 		log.Info("Using network type mesh", nil)
-
 		return NewMeshHandler(log, wss)
 	}
 }
 
 func static(prefix string, box fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(box))
-
 	return http.StripPrefix(prefix, fileServer)
 }
 
@@ -203,13 +261,11 @@ func (mux *Mux) routeNewCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	url := mux.BaseURL + "/call/" + url.PathEscape(callID)
-
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
 func (mux *Mux) routeIndex(w http.ResponseWriter, r *http.Request) (string, interface{}, error) {
 	data := mux.getData()
-
 	return "index.html", data, nil
 }
 
@@ -238,6 +294,5 @@ func (mux *Mux) routeCall(w http.ResponseWriter, r *http.Request) (string, inter
 	}
 
 	configJSON, _ := json.Marshal(config)
-
 	return "call.html", string(configJSON), nil
 }

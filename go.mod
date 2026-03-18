@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi v4.0.3+incompatible
 	github.com/go-redis/redis/v7 v7.2.0
 	github.com/google/uuid v1.3.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/juju/errors v0.0.0-20200330140219-3fe23663418f
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c
 	github.com/pion/interceptor v0.1.25
