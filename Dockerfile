@@ -47,8 +47,9 @@ RUN set -ex \
 FROM scratch
 
 COPY --from=server /src/peer-calls /usr/local/bin/
+COPY --from=server /src/config.yaml /config.yaml
 
 EXPOSE 3000/tcp
 STOPSIGNAL SIGINT
 
-ENTRYPOINT ["/usr/local/bin/peer-calls"]
+ENTRYPOINT ["/usr/local/bin/peer-calls", "-c", "/config.yaml"]
