@@ -170,12 +170,14 @@ export class SubtitleOverlay {
 
   private sendConfig(): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const roomId = window.location.pathname.split('/').pop() || 'default'
       this.ws.send(JSON.stringify({
         type:        'config',
         spoken_lang: this.spokenLang,
         target_lang: this.targetLang,
+        room_id:     roomId,
       }))
-      console.log(`[Subtitles] Config sent: spoken=${this.spokenLang}, target=${this.targetLang}`)
+      console.log(`[Subtitles] Config sent: spoken=${this.spokenLang}, target=${this.targetLang}, room=${roomId}`)
     }
   }
 
