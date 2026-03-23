@@ -35,6 +35,35 @@ const SUBTITLE_LANGUAGES: { code: string; name: string }[] = [
   { code: 'as', name: 'Assamese' },
   { code: 'ne', name: 'Nepali' },
   { code: 'si', name: 'Sinhala' },
+  // European
+  { code: 'fr', name: 'French' },
+  { code: 'de', name: 'German' },
+  { code: 'es', name: 'Spanish' },
+  { code: 'it', name: 'Italian' },
+  { code: 'pt', name: 'Portuguese' },
+  { code: 'nl', name: 'Dutch' },
+  { code: 'pl', name: 'Polish' },
+  { code: 'ru', name: 'Russian' },
+  { code: 'uk', name: 'Ukrainian' },
+  { code: 'sv', name: 'Swedish' },
+  { code: 'no', name: 'Norwegian' },
+  { code: 'da', name: 'Danish' },
+  { code: 'fi', name: 'Finnish' },
+  { code: 'cs', name: 'Czech' },
+  { code: 'ro', name: 'Romanian' },
+  { code: 'hu', name: 'Hungarian' },
+  // Asian
+  { code: 'ja', name: 'Japanese' },
+  { code: 'ko', name: 'Korean' },
+  { code: 'th', name: 'Thai' },
+  { code: 'vi', name: 'Vietnamese' },
+  { code: 'id', name: 'Indonesian' },
+  { code: 'ms', name: 'Malay' },
+  // Middle Eastern
+  { code: 'ar', name: 'Arabic' },
+  { code: 'fa', name: 'Persian' },
+  { code: 'tr', name: 'Turkish' },
+  { code: 'he', name: 'Hebrew' },
 ]
 
 /**
