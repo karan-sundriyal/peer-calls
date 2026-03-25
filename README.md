@@ -6,9 +6,13 @@
 
 This project extends the open-source [peer-calls](https://github.com/peer-calls/peer-calls) video calling app with a real-time subtitle system powered by OpenAI's Whisper model. Every participant's speech is transcribed and translated live — so a Hindi speaker and a French speaker can have a natural conversation, each reading subtitles in their own language.
 
+Before checking the demo the user has to manually start the collab server to start the model after which live transcription will occur. Go on the below link and execute the commands in it.
+
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/karan-sundriyal/peer-calls/blob/peercall/PeerCall.ipynb)
 
 **Live demo:** https://peer-calls-u0yc.onrender.com
+
+**Note:** currently tested for two users might show strange behavious on more than that
 
 ---
 
@@ -17,8 +21,6 @@ This project extends the open-source [peer-calls](https://github.com/peer-calls/
 - **Group video calls** — peer-to-peer WebRTC mesh, no media server required
 - **Live transcription** — OpenAI Whisper (medium model) running on GPU
 - **Live translation** — Google Translate API via deep-translator, per-participant target language
-- **40+ languages** — Hindi, Tamil, Telugu, French, German, Spanish, Japanese, Arabic and more
-- **Room-based broadcast** — subtitles from any speaker go to every participant in the room
 - **Noise filtering** — VAD threshold, RMS energy gate, per-segment confidence filtering
 - **Per-user language settings** — each participant independently sets spoken and target language
 
